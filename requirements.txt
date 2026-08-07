@@ -1,6 +1,5 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu
-torchaudio==2.2.2+cpu
+torch
+torchaudio
 librosa
 soundfile
 scikit-learn
@@ -15,3 +14,4 @@ streamlit
 requests
 joblib
 opencv-python-headless
+imageio-ffmpeg
