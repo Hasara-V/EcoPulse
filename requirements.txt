@@ -1,0 +1,16 @@
+torch
+torchaudio
+librosa
+soundfile
+scikit-learn
+numpy
+pandas
+matplotlib
+ultralytics
+geopandas
+shapely
+pyogrio
+streamlit
+requests
+joblib
+roboflow
