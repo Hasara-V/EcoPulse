@@ -13,4 +13,4 @@ pyogrio
 streamlit
 requests
 joblib
-roboflow
+opencv-python-headless
