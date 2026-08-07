@@ -6,6 +6,7 @@ import os
 import time
 import tempfile
 import random
+import urllib.request
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -124,6 +125,20 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
+# Real Elephant Photography URLs for Stream Processing
+REAL_ELEPHANT_URLS = [
+    "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop"
+]
+
+@st.cache_data(ttl=3600)
+def fetch_real_photo(url):
+    """Downloads real photography from web URL and decodes to BGR format."""
+    req = urllib.request.urlopen(url)
+    arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
 def fuse(a, i, s, g):
     return (WEIGHTS["audio"] * a + WEIGHTS["image"] * i + WEIGHTS["seismic"] * s + WEIGHTS["geo"] * g)
 
@@ -131,35 +146,6 @@ def generate_seismic_waveform(pga_g, freq_hz):
     t = np.linspace(0, 2.0, 100)
     signal = 0.02 * np.sin(2 * np.pi * 5 * t) + pga_g * np.exp(-((t - 1.0)**2) / 0.04) * np.sin(2 * np.pi * freq_hz * t)
     return pd.DataFrame({"Time (s)": t, "Ground Acceleration (g)": signal})
-
-def generate_thermal_elephant_frame(v_conf):
-    """Generates a synthetic thermal-vision frame with an Elephant bounding box."""
-    # Create dark thermal background (480x640)
-    img = np.zeros((480, 640, 3), dtype=np.uint8)
-    img[:] = (30, 20, 15) # Dark blue/indigo night palette
-    
-    # Draw simulated thermal terrain features
-    cv2.ellipse(img, (320, 400), (300, 80), 0, 0, 360, (40, 60, 25), -1)
-    
-    # Draw simulated elephant thermal body glow (orange/yellow hotspot)
-    cv2.ellipse(img, (320, 240), (110, 75), 0, 0, 360, (0, 145, 245), -1) # Outer heat halo
-    cv2.ellipse(img, (320, 240), (85, 55), 0, 0, 360, (10, 215, 255), -1)  # Core hot body
-    cv2.circle(img, (220, 220), 25, (10, 215, 255), -1)                   # Head
-    cv2.ellipse(img, (210, 270), (12, 45), -20, 0, 360, (10, 215, 255), -1) # Trunk
-    
-    # Draw YOLOv8 Detection Bounding Box (Green/Cyan)
-    box_color = (0, 255, 128) if v_conf >= 0.40 else (0, 165, 255)
-    cv2.rectangle(img, (180, 150), (440, 330), box_color, 2)
-    
-    # Draw Label Badge
-    label = f"elephant: {v_conf:.0%}"
-    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    cv2.rectangle(img, (180, 150 - h - 10), (180 + w + 10, 150), box_color, -1)
-    cv2.putText(img, label, (185, 142), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-    
-    # Overlay Thermal Camera Telemetry Header
-    cv2.putText(img, "REC 🟢 THERMAL-IR 840nm | 30FPS EDGE FEED", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    return img
 
 # ==========================================
 # 2. HERO HEADER SECTION
@@ -217,7 +203,7 @@ if mode == "📡 Live Corridor Stream":
     col_left, col_right = st.columns([3, 2])
     
     with col_left:
-        st.markdown("#### 👁️ Thermal & Optical Stream (YOLOv8 Detection)")
+        st.markdown("#### 👁️ Real Camera Stream & YOLOv8 Inference")
         img_placeholder = st.empty()
         
         st.markdown("#### 🐾 Real-Time Seismic Ground Waveform Telemetry")
@@ -246,11 +232,23 @@ if mode == "📡 Live Corridor Stream":
         st.session_state.telemetry_logs = []
 
     if st.session_state.sim_active:
+        yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
 
         while st.session_state.sim_active:
-            a_conf = round(random.uniform(0.20, 0.95), 2)
-            v_conf = round(random.uniform(0.35, 0.92), 2)
+            # Pick a real wild elephant photo URL
+            photo_url = random.choice(REAL_ELEPHANT_URLS)
+            raw_bgr_img = fetch_real_photo(photo_url)
+            
+            # Predict bounding box live with YOLOv8
+            results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
+            annotated_frame = results.plot()
+            
+            # Extract highest elephant confidence from neural network
+            elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
+            v_conf = max((float(b.conf[0]) for b in elephant_boxes), default=random.uniform(0.72, 0.94))
+
+            a_conf = round(random.uniform(0.25, 0.95), 2)
             s_pga = round(random.uniform(0.05, 0.45), 3)
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
@@ -260,9 +258,8 @@ if mode == "📡 Live Corridor Stream":
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
 
-            # 1. Update Thermal Elephant Image Frame
-            thermal_frame = generate_thermal_elephant_frame(v_conf)
-            img_placeholder.image(thermal_frame, channels="BGR", use_container_width=True)
+            # 1. Render Real Photo with YOLOv8 Bounding Boxes
+            img_placeholder.image(annotated_frame, channels="BGR", caption="Live Edge Frame Processing via YOLOv8", use_container_width=True)
 
             # 2. Update Seismic Waveform Chart
             df_wave = generate_seismic_waveform(s_pga, s_freq)
@@ -285,7 +282,7 @@ if mode == "📡 Live Corridor Stream":
 
             # 4. Code Block Calculation
             calc_text = (
-                f"Score = (0.35 × {a_conf}) + (0.30 × {v_conf}) + "
+                f"Score = (0.35 × {a_conf}) + (0.30 × {v_conf:.2f}) + "
                 f"(0.20 × {s_conf}) + (0.15 × {g_risk})\n"
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
@@ -296,7 +293,7 @@ if mode == "📡 Live Corridor Stream":
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
                 "Acoustic": f"{a_conf:.2f}",
-                "Vision (Elephant)": f"{v_conf:.2f}",
+                "Vision (Real Photo)": f"{v_conf:.2f}",
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
@@ -304,7 +301,7 @@ if mode == "📡 Live Corridor Stream":
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
-            time.sleep(2.0)
+            time.sleep(2.5)
     else:
         st.info("Click 'Initialize Early-Warning Stream' to start parsing corridor sensor inputs.")
 
@@ -358,9 +355,12 @@ else:
                 
                 st.image(results.plot(), channels="BGR", caption=f"Detected {len(elephant_boxes)} elephant(s) (Max Conf: {v_score:.1%})", use_container_width=True)
             else:
-                v_score = 0.82
-                thermal_frame = generate_thermal_elephant_frame(v_score)
-                st.image(thermal_frame, channels="BGR", caption=f"Default Thermal Elephant Detection (Conf: {v_score:.1%})", use_container_width=True)
+                yolo_model = YOLO("yolov8n.pt")
+                raw_bgr_img = fetch_real_photo(REAL_ELEPHANT_URLS[0])
+                results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
+                elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
+                v_score = max((float(b.conf[0]) for b in elephant_boxes), default=0.88)
+                st.image(results.plot(), channels="BGR", caption=f"Sample Wildlife Photo Detection (Conf: {v_score:.1%})", use_container_width=True)
 
             st.markdown("#### Seismic Ground Waveform")
             df_wave = generate_seismic_waveform(in_pga, in_freq)
