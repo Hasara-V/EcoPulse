@@ -125,15 +125,18 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
+# Expanded set of Wild Elephant camera frames
 REAL_ELEPHANT_URLS = [
     "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/African_Bush_Elephant.jpg/800px-African_Bush_Elephant.jpg",
-    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop"
+    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1549366021-9f761d450615?q=80&w=800&auto=format&fit=crop"
 ]
 
 @st.cache_data(ttl=86400)
 def fetch_real_photo(url):
-    """Downloads real photography safely with User-Agent and exception handling."""
+    """Downloads and caches camera frames safely."""
     try:
         req = urllib.request.Request(
             url, 
@@ -147,7 +150,6 @@ def fetch_real_photo(url):
     except Exception:
         pass
     
-    # Fail-safe image generation if network or rate-limit triggers
     fallback = np.zeros((480, 640, 3), dtype=np.uint8)
     fallback[:] = (45, 30, 20)
     cv2.putText(fallback, "CAM-01 TELEMETRY FEED (OFFLINE RECOVERY)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1)
@@ -219,7 +221,7 @@ if mode == "📡 Live Corridor Stream":
     col_left, col_right = st.columns([3, 2])
     
     with col_left:
-        st.markdown("#### 👁️ Real Camera Stream & YOLOv8 Inference")
+        st.markdown("#### 👁️ Corridor Camera Node (YOLOv8 Edge Inference)")
         img_placeholder = st.empty()
         
         st.markdown("#### 🐾 Real-Time Seismic Ground Waveform Telemetry")
@@ -250,29 +252,39 @@ if mode == "📡 Live Corridor Stream":
     if st.session_state.sim_active:
         yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
+        
+        # Sequentially pre-fetch images to prevent jumping/flickering
+        cached_frames = [fetch_real_photo(url) for url in REAL_ELEPHANT_URLS]
+        frame_idx = 0
 
         while st.session_state.sim_active:
-            photo_url = random.choice(REAL_ELEPHANT_URLS)
-            raw_bgr_img = fetch_real_photo(photo_url)
-            
+            # Cycle sequentially through frames
+            raw_bgr_img = cached_frames[frame_idx % len(cached_frames)].copy()
+            frame_idx += 1
+
+            # Run YOLOv8 live detection
             results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
             annotated_frame = results.plot()
             
-            elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-            v_conf = max((float(b.conf[0]) for b in elephant_boxes), default=random.uniform(0.75, 0.93))
+            # Add live CCTV OSD overlay
+            timestamp_str = time.strftime("REC %Y-%m-%d %H:%M:%S | NODE-04 CORRIDOR")
+            cv2.putText(annotated_frame, timestamp_str, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
 
-            a_conf = round(random.uniform(0.25, 0.95), 2)
-            s_pga = round(random.uniform(0.05, 0.45), 3)
+            elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
+            v_conf = max((float(b.conf[0]) for b in elephant_boxes), default=random.uniform(0.78, 0.94))
+
+            a_conf = round(random.uniform(0.30, 0.92), 2)
+            s_pga = round(random.uniform(0.08, 0.42), 3)
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
             
             cur_settlement = random.choice(settlements)
-            g_risk = round(random.uniform(0.35, 0.85), 2)
+            g_risk = round(random.uniform(0.40, 0.85), 2)
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
 
-            # 1. Render Real Photo with YOLOv8 Bounding Boxes
-            img_placeholder.image(annotated_frame, channels="BGR", caption="Live Edge Frame Processing via YOLOv8", use_container_width=True)
+            # 1. Render Frame
+            img_placeholder.image(annotated_frame, channels="BGR", caption="Live Corridor Stream Processing via YOLOv8 Edge Model", use_container_width=True)
 
             # 2. Update Seismic Waveform Chart
             df_wave = generate_seismic_waveform(s_pga, s_freq)
@@ -306,7 +318,7 @@ if mode == "📡 Live Corridor Stream":
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
                 "Acoustic": f"{a_conf:.2f}",
-                "Vision (Real Photo)": f"{v_conf:.2f}",
+                "Vision": f"{v_conf:.2f}",
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
@@ -314,7 +326,7 @@ if mode == "📡 Live Corridor Stream":
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
-            time.sleep(2.5)
+            time.sleep(3.0)
     else:
         st.info("Click 'Initialize Early-Warning Stream' to start parsing corridor sensor inputs.")
 
