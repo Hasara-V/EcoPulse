@@ -2,7 +2,6 @@
 EcoPulse - Streamlit demo
 
 """
-
 import os
 import time
 import tempfile
@@ -24,7 +23,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Defined as a raw multiline string variable to prevent SyntaxErrors
 CSS_STYLE = r"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
@@ -120,7 +118,6 @@ div.stButton > button:hover {
 }
 </style>
 """
-
 st.markdown(CSS_STYLE, unsafe_allow_html=True)
 
 # Multi-Sensor Fusion Weights
@@ -135,6 +132,35 @@ def generate_seismic_waveform(pga_g, freq_hz):
     signal = 0.02 * np.sin(2 * np.pi * 5 * t) + pga_g * np.exp(-((t - 1.0)**2) / 0.04) * np.sin(2 * np.pi * freq_hz * t)
     return pd.DataFrame({"Time (s)": t, "Ground Acceleration (g)": signal})
 
+def generate_thermal_elephant_frame(v_conf):
+    """Generates a synthetic thermal-vision frame with an Elephant bounding box."""
+    # Create dark thermal background (480x640)
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    img[:] = (30, 20, 15) # Dark blue/indigo night palette
+    
+    # Draw simulated thermal terrain features
+    cv2.ellipse(img, (320, 400), (300, 80), 0, 0, 360, (40, 60, 25), -1)
+    
+    # Draw simulated elephant thermal body glow (orange/yellow hotspot)
+    cv2.ellipse(img, (320, 240), (110, 75), 0, 0, 360, (0, 145, 245), -1) # Outer heat halo
+    cv2.ellipse(img, (320, 240), (85, 55), 0, 0, 360, (10, 215, 255), -1)  # Core hot body
+    cv2.circle(img, (220, 220), 25, (10, 215, 255), -1)                   # Head
+    cv2.ellipse(img, (210, 270), (12, 45), -20, 0, 360, (10, 215, 255), -1) # Trunk
+    
+    # Draw YOLOv8 Detection Bounding Box (Green/Cyan)
+    box_color = (0, 255, 128) if v_conf >= 0.40 else (0, 165, 255)
+    cv2.rectangle(img, (180, 150), (440, 330), box_color, 2)
+    
+    # Draw Label Badge
+    label = f"elephant: {v_conf:.0%}"
+    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    cv2.rectangle(img, (180, 150 - h - 10), (180 + w + 10, 150), box_color, -1)
+    cv2.putText(img, label, (185, 142), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
+    
+    # Overlay Thermal Camera Telemetry Header
+    cv2.putText(img, "REC 🟢 THERMAL-IR 840nm | 30FPS EDGE FEED", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    return img
+
 # ==========================================
 # 2. HERO HEADER SECTION
 # ==========================================
@@ -147,7 +173,7 @@ HERO_HTML = r"""
         🐘 EcoPulse Early-Warning Core
     </h1>
     <p style="color: #cbd5e1; font-size: 14px; margin: 0;">
-        <strong>Data Odyssey 2026</strong> | Real-Time Human-Elephant Conflict Mitigation via Bioacoustic, Vision, Seismic & Geospatial Fusion.
+        <strong>Data Odyssey 2026</strong> | Real-Time Human-Elephant Conflict Mitigation via Bioacoustic, Thermal Vision, Seismic & Geospatial Fusion.
     </p>
 </div>
 """
@@ -191,7 +217,7 @@ if mode == "📡 Live Corridor Stream":
     col_left, col_right = st.columns([3, 2])
     
     with col_left:
-        st.markdown("#### 👁️ Thermal & Vision Stream (YOLOv8 Processing)")
+        st.markdown("#### 👁️ Thermal & Optical Stream (YOLOv8 Detection)")
         img_placeholder = st.empty()
         
         st.markdown("#### 🐾 Real-Time Seismic Ground Waveform Telemetry")
@@ -220,12 +246,11 @@ if mode == "📡 Live Corridor Stream":
         st.session_state.telemetry_logs = []
 
     if st.session_state.sim_active:
-        yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
 
         while st.session_state.sim_active:
             a_conf = round(random.uniform(0.20, 0.95), 2)
-            v_conf = round(random.uniform(0.15, 0.90), 2)
+            v_conf = round(random.uniform(0.35, 0.92), 2)
             s_pga = round(random.uniform(0.05, 0.45), 3)
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
@@ -235,14 +260,18 @@ if mode == "📡 Live Corridor Stream":
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
 
-            # 1. Update Seismic Waveform Chart
-            df_wave = generate_seismic_waveform(s_pga, s_freq)
-            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=160)
+            # 1. Update Thermal Elephant Image Frame
+            thermal_frame = generate_thermal_elephant_frame(v_conf)
+            img_placeholder.image(thermal_frame, channels="BGR", use_container_width=True)
 
-            # 2. Display Status Badges
+            # 2. Update Seismic Waveform Chart
+            df_wave = generate_seismic_waveform(s_pga, s_freq)
+            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
+
+            # 3. Display Status Badges
             if fused_score >= ALERT_THRESHOLD:
                 status_placeholder.markdown('<div class="status-high">⚠️ HIGH THREAT DETECTED</div>', unsafe_allow_html=True)
-                st.toast(f"🚨 ALERT: Elephant movement detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
+                st.toast(f"🚨 ALERT: Elephant detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
             elif fused_score >= 0.35:
                 status_placeholder.markdown('<div class="status-med">⚡ ELEVATED MOVEMENT</div>', unsafe_allow_html=True)
             else:
@@ -254,7 +283,7 @@ if mode == "📡 Live Corridor Stream":
             seismic_m.metric("Seismic", f"{s_pga:.2f}g")
             geo_m.metric("Geo Risk", f"{g_risk:.0%}")
 
-            # 3. Code Block Calculation
+            # 4. Code Block Calculation
             calc_text = (
                 f"Score = (0.35 × {a_conf}) + (0.30 × {v_conf}) + "
                 f"(0.20 × {s_conf}) + (0.15 × {g_risk})\n"
@@ -262,12 +291,12 @@ if mode == "📡 Live Corridor Stream":
             )
             math_placeholder.code(calc_text, language="text")
 
-            # 4. Append Telemetry Logs
+            # 5. Append Telemetry Logs
             st.session_state.telemetry_logs.insert(0, {
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
                 "Acoustic": f"{a_conf:.2f}",
-                "Vision": f"{v_conf:.2f}",
+                "Vision (Elephant)": f"{v_conf:.2f}",
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
@@ -293,7 +322,7 @@ else:
         
     with col_u2:
         st.markdown("#### 2. Vision")
-        up_image = st.file_uploader("Upload Photo", type=["jpg", "png", "webp"])
+        up_image = st.file_uploader("Upload Photo", type=["jpg", "jpeg", "png", "webp"])
 
     with col_u3:
         st.markdown("#### 3. Seismic Inputs")
@@ -315,7 +344,7 @@ else:
         g_score = 0.68
         
         with col_res1:
-            st.markdown("### 📷 Computer Vision & Seismic Telemetry")
+            st.markdown("### 📷 Computer Vision Elephant Detection")
             if up_image:
                 yolo_model = YOLO("yolov8n.pt")
                 suffix = Path(up_image.name).suffix or ".jpg"
@@ -329,7 +358,9 @@ else:
                 
                 st.image(results.plot(), channels="BGR", caption=f"Detected {len(elephant_boxes)} elephant(s) (Max Conf: {v_score:.1%})", use_container_width=True)
             else:
-                st.info("No photo uploaded.")
+                v_score = 0.82
+                thermal_frame = generate_thermal_elephant_frame(v_score)
+                st.image(thermal_frame, channels="BGR", caption=f"Default Thermal Elephant Detection (Conf: {v_score:.1%})", use_container_width=True)
 
             st.markdown("#### Seismic Ground Waveform")
             df_wave = generate_seismic_waveform(in_pga, in_freq)
@@ -341,7 +372,8 @@ else:
                 a_score = 0.85
                 st.success(f"Trumpeting Signature Detected (Confidence: {a_score:.1%})")
             else:
-                st.info("No audio clip uploaded.")
+                a_score = 0.70
+                st.info(f"Acoustic Score: {a_score:.1%}")
 
             st.write(f"🐾 **Seismic Footfall Score**: `{s_score:.1%}` (PGA: `{in_pga}g`, Freq: `{in_freq}Hz`)")
             st.write(f"🗺️ **Geospatial Risk Index**: `{g_score:.1%}` for **{sel_settlement}**")
