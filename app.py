@@ -125,24 +125,18 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-# Expanded set of Wild Elephant camera frames
-REAL_ELEPHANT_URLS = [
-    "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/African_Bush_Elephant.jpg/800px-African_Bush_Elephant.jpg",
-    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1549366021-9f761d450615?q=80&w=800&auto=format&fit=crop"
-]
+# Fixed High-Resolution Wildlife Corridor Scene
+CORRIDOR_IMAGE_URL = "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=1200&auto=format&fit=crop"
 
 @st.cache_data(ttl=86400)
-def fetch_real_photo(url):
-    """Downloads and caches camera frames safely."""
+def fetch_corridor_base_image():
+    """Downloads and caches the primary corridor camera image."""
     try:
         req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            CORRIDOR_IMAGE_URL, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=8) as response:
             arr = np.asarray(bytearray(response.read()), dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
@@ -150,11 +144,9 @@ def fetch_real_photo(url):
     except Exception:
         pass
     
-    fallback = np.zeros((480, 640, 3), dtype=np.uint8)
-    fallback[:] = (45, 30, 20)
-    cv2.putText(fallback, "CAM-01 TELEMETRY FEED (OFFLINE RECOVERY)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1)
-    cv2.rectangle(fallback, (180, 120), (460, 360), (0, 255, 128), 2)
-    cv2.putText(fallback, "elephant: 88%", (185, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 128), 2)
+    # Fail-safe camera view
+    fallback = np.zeros((500, 800, 3), dtype=np.uint8)
+    fallback[:] = (35, 25, 20)
     return fallback
 
 def fuse(a, i, s, g):
@@ -221,7 +213,7 @@ if mode == "📡 Live Corridor Stream":
     col_left, col_right = st.columns([3, 2])
     
     with col_left:
-        st.markdown("#### 👁️ Corridor Camera Node (YOLOv8 Edge Inference)")
+        st.markdown("#### 👁️ Corridor Camera Node (YOLOv8 Edge Tracking)")
         img_placeholder = st.empty()
         
         st.markdown("#### 🐾 Real-Time Seismic Ground Waveform Telemetry")
@@ -253,38 +245,39 @@ if mode == "📡 Live Corridor Stream":
         yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        # Sequentially pre-fetch images to prevent jumping/flickering
-        cached_frames = [fetch_real_photo(url) for url in REAL_ELEPHANT_URLS]
-        frame_idx = 0
+        base_img = fetch_corridor_base_image()
+        
+        # Run YOLOv8 on the real corridor image
+        results = yolo_model.predict(base_img, conf=0.25, verbose=False)[0]
+        detected_img = results.plot()
+
+        step_counter = 0
 
         while st.session_state.sim_active:
-            # Cycle sequentially through frames
-            raw_bgr_img = cached_frames[frame_idx % len(cached_frames)].copy()
-            frame_idx += 1
+            step_counter += 1
+            frame = detected_img.copy()
 
-            # Run YOLOv8 live detection
-            results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
-            annotated_frame = results.plot()
-            
-            # Add live CCTV OSD overlay
-            timestamp_str = time.strftime("REC %Y-%m-%d %H:%M:%S | NODE-04 CORRIDOR")
-            cv2.putText(annotated_frame, timestamp_str, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+            # Live CCTV Telemetry Overlay
+            timestamp_str = time.strftime("REC ● 30FPS | CAM-04 HABARANA CORRIDOR | %Y-%m-%d %H:%M:%S")
+            cv2.rectangle(frame, (10, 10), (620, 45), (15, 23, 42), -1)
+            cv2.putText(frame, timestamp_str, (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (52, 211, 153), 2, cv2.LINE_AA)
 
+            # Extract confidence score from YOLOv8
             elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-            v_conf = max((float(b.conf[0]) for b in elephant_boxes), default=random.uniform(0.78, 0.94))
+            v_conf = max((float(b.conf[0]) for b in elephant_boxes), default=0.91)
 
-            a_conf = round(random.uniform(0.30, 0.92), 2)
-            s_pga = round(random.uniform(0.08, 0.42), 3)
-            s_freq = round(random.uniform(10.0, 22.0), 1)
+            a_conf = round(random.uniform(0.40, 0.95), 2)
+            s_pga = round(random.uniform(0.12, 0.45), 3)
+            s_freq = round(random.uniform(12.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
             
             cur_settlement = random.choice(settlements)
-            g_risk = round(random.uniform(0.40, 0.85), 2)
+            g_risk = round(random.uniform(0.45, 0.85), 2)
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
 
-            # 1. Render Frame
-            img_placeholder.image(annotated_frame, channels="BGR", caption="Live Corridor Stream Processing via YOLOv8 Edge Model", use_container_width=True)
+            # 1. Update Camera Frame
+            img_placeholder.image(frame, channels="BGR", caption="Continuous Corridor Stream | YOLOv8 Neural Edge Detection", use_container_width=True)
 
             # 2. Update Seismic Waveform Chart
             df_wave = generate_seismic_waveform(s_pga, s_freq)
@@ -293,7 +286,8 @@ if mode == "📡 Live Corridor Stream":
             # 3. Display Status Badges
             if fused_score >= ALERT_THRESHOLD:
                 status_placeholder.markdown('<div class="status-high">⚠️ HIGH THREAT DETECTED</div>', unsafe_allow_html=True)
-                st.toast(f"🚨 ALERT: Elephant detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
+                if step_counter % 3 == 0:
+                    st.toast(f"🚨 ALERT: Elephant movement detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
             elif fused_score >= 0.35:
                 status_placeholder.markdown('<div class="status-med">⚡ ELEVATED MOVEMENT</div>', unsafe_allow_html=True)
             else:
@@ -326,7 +320,7 @@ if mode == "📡 Live Corridor Stream":
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
-            time.sleep(3.0)
+            time.sleep(2.0)
     else:
         st.info("Click 'Initialize Early-Warning Stream' to start parsing corridor sensor inputs.")
 
@@ -381,10 +375,10 @@ else:
                 st.image(results.plot(), channels="BGR", caption=f"Detected {len(elephant_boxes)} elephant(s) (Max Conf: {v_score:.1%})", use_container_width=True)
             else:
                 yolo_model = YOLO("yolov8n.pt")
-                raw_bgr_img = fetch_real_photo(REAL_ELEPHANT_URLS[0])
-                results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
+                base_img = fetch_corridor_base_image()
+                results = yolo_model.predict(base_img, conf=0.25, verbose=False)[0]
                 elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-                v_score = max((float(b.conf[0]) for b in elephant_boxes), default=0.88)
+                v_score = max((float(b.conf[0]) for b in elephant_boxes), default=0.91)
                 st.image(results.plot(), channels="BGR", caption=f"Sample Wildlife Photo Detection (Conf: {v_score:.1%})", use_container_width=True)
 
             st.markdown("#### Seismic Ground Waveform")
