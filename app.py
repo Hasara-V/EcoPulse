@@ -125,28 +125,13 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-# 20 Real Wild Elephant Camera Feed URLs
-REAL_ELEPHANT_URLS = [
-    "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/African_Bush_Elephant.jpg/800px-African_Bush_Elephant.jpg",
-    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1549366021-9f761d450615?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1534567153574-2b12153a87f0?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1564760055775-d63b17a55c44?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1516426122078-c23e76319801?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1574063413132-355dbfd83e0c?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1448375240586-882707db888b?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1526095179574-86e5458421e3?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1589656966895-2f33e7653819?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1603483080228-04f2313d9f10?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1561731216-c3a4d99437d5?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1517849845537-4d257902454a?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1546182990-dffeafbe841d?q=80&w=800&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1519066629447-267fffa62d4b?q=80&w=800&auto=format&fit=crop"
+# Multi-animal test set (Elephants, Dogs, Non-elephants)
+REAL_CAMERA_URLS = [
+    "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop", # Elephant
+    "https://images.unsplash.com/photo-1543466835-00a7907e9de1?q=80&w=800&auto=format&fit=crop", # Dog
+    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop", # Elephant
+    "https://images.unsplash.com/photo-1537151608828-ea2b11777ee8?q=80&w=800&auto=format&fit=crop", # Dog
+    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop"  # Elephant
 ]
 
 @st.cache_data(ttl=86400)
@@ -165,21 +150,15 @@ def fetch_real_photo(url):
     except Exception:
         pass
     
-    # Fallback frame
     fallback = np.zeros((480, 720, 3), dtype=np.uint8)
     fallback[:] = (45, 30, 20)
-    cv2.putText(fallback, "CAM-01 TELEMETRY FEED (RECOVERY MODE)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
-    cv2.rectangle(fallback, (180, 120), (540, 380), (0, 255, 128), 2)
-    cv2.putText(fallback, "elephant: 88%", (185, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 128), 2)
+    cv2.putText(fallback, "CAM-01 FEED (RECOVERY MODE)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
     return fallback
 
 @st.cache_data(ttl=86400)
-def load_all_20_frames():
-    """Pre-loads all 20 image frames into memory for smooth streaming."""
-    frames = []
-    for url in REAL_ELEPHANT_URLS:
-        frames.append(fetch_real_photo(url))
-    return frames
+def load_all_frames():
+    """Pre-loads camera frames into memory."""
+    return [fetch_real_photo(url) for url in REAL_CAMERA_URLS]
 
 def fuse(a, i, s, g):
     return (WEIGHTS["audio"] * a + WEIGHTS["image"] * i + WEIGHTS["seismic"] * s + WEIGHTS["geo"] * g)
@@ -277,42 +256,42 @@ if mode == "📡 Live Corridor Stream":
         yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        # Load all 20 frames into memory
-        all_frames = load_all_20_frames()
+        all_frames = load_all_frames()
         frame_idx = 0
 
         while st.session_state.sim_active:
-            # Pick current frame sequentially
             raw_bgr_img = all_frames[frame_idx % len(all_frames)].copy()
-            cam_node_id = (frame_idx % 5) + 1  # Cycle across 5 node IDs
+            cam_node_id = (frame_idx % 5) + 1
             frame_idx += 1
 
             # Run YOLOv8 live detection
             results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
             annotated_frame = results.plot()
             
-            # OSD Overlay
-            timestamp_str = time.strftime(f"REC ● 30FPS | CAM-0{cam_node_id} CORRIDOR | %Y-%m-%d %H:%M:%S")
-            cv2.rectangle(annotated_frame, (10, 10), (620, 45), (15, 23, 42), -1)
-            cv2.putText(annotated_frame, timestamp_str, (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (52, 211, 153), 2, cv2.LINE_AA)
-
-            # Get Vision score from actual YOLO detection
+            # Extract ELEPHANT confidence specifically
             elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
+            
             if elephant_boxes:
                 v_conf = float(max(b.conf[0] for b in elephant_boxes))
+                a_conf = round(random.uniform(0.70, 0.95), 2)  # High acoustic if elephant present
+                s_pga = round(random.uniform(0.20, 0.45), 3)    # High seismic
             else:
-                v_conf = round(random.uniform(0.72, 0.93), 2)
+                v_conf = 0.0  # ZERO confidence if dog/other object is detected!
+                a_conf = round(random.uniform(0.05, 0.25), 2)  # Low background noise
+                s_pga = round(random.uniform(0.02, 0.10), 3)    # Low ground vibration
 
-            # Shift acoustic and seismic in sync with the new frame
-            a_conf = round(random.uniform(0.30, 0.95), 2)
-            s_pga = round(random.uniform(0.08, 0.45), 3)
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
             
             cur_settlement = settlements[frame_idx % len(settlements)]
-            g_risk = round(random.uniform(0.40, 0.85), 2)
+            g_risk = round(random.uniform(0.30, 0.70), 2)
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
+
+            # OSD Telemetry Overlay
+            timestamp_str = time.strftime(f"REC ● 30FPS | CAM-0{cam_node_id} CORRIDOR | %Y-%m-%d %H:%M:%S")
+            cv2.rectangle(annotated_frame, (10, 10), (620, 45), (15, 23, 42), -1)
+            cv2.putText(annotated_frame, timestamp_str, (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (52, 211, 153), 2, cv2.LINE_AA)
 
             # 1. Update Camera Stream
             img_placeholder.image(annotated_frame, channels="BGR", caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
@@ -350,11 +329,11 @@ if mode == "📡 Live Corridor Stream":
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
                 "Acoustic": f"{a_conf:.2f}",
-                "Vision": f"{v_conf:.2f}",
+                "Vision (Elephant)": f"{v_conf:.2f}",
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
-                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD else "Monitored"
+                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD else "Monitored / Clear"
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
@@ -395,10 +374,10 @@ else:
         
         a_score, v_score = 0.0, 0.0
         s_score = min(in_pga / 0.35, 1.0)
-        g_score = 0.68
+        g_score = 0.50
         
         with col_res1:
-            st.markdown("### 📷 Computer Vision Elephant Detection")
+            st.markdown("### 📷 Computer Vision Detection")
             if up_image:
                 yolo_model = YOLO("yolov8n.pt")
                 suffix = Path(up_image.name).suffix or ".jpg"
@@ -407,17 +386,22 @@ else:
                     tmp_img_path = tmp.name
                     
                 results = yolo_model.predict(tmp_img_path, conf=0.25, verbose=False)[0]
+                detected_names = [yolo_model.names[int(b.cls[0])] for b in results.boxes]
                 elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-                v_score = max((float(b.conf[0]) for b in elephant_boxes), default=0.0)
                 
-                st.image(results.plot(), channels="BGR", caption=f"Detected {len(elephant_boxes)} elephant(s) (Max Conf: {v_score:.1%})", use_container_width=True)
+                if elephant_boxes:
+                    v_score = max(float(b.conf[0]) for b in elephant_boxes)
+                    st.success(f"🐘 Elephant Detected! Confidence: {v_score:.1%}")
+                else:
+                    v_score = 0.0  # ZERO ELEPHANT CONFIDENCE FOR DOGS / LIONS / BEARS
+                    if detected_names:
+                        st.warning(f"⚠️ Non-Target Detected: **{', '.join(set(detected_names))}**. Elephant Vision Score: **0.0%**")
+                    else:
+                        st.info("ℹ️ No target animals detected. Elephant Vision Score: **0.0%**")
+
+                st.image(results.plot(), channels="BGR", use_container_width=True)
             else:
-                yolo_model = YOLO("yolov8n.pt")
-                raw_bgr_img = fetch_real_photo(REAL_ELEPHANT_URLS[0])
-                results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
-                elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-                v_score = max((float(b.conf[0]) for b in elephant_boxes), default=0.88)
-                st.image(results.plot(), channels="BGR", caption=f"Sample Wildlife Photo Detection (Conf: {v_score:.1%})", use_container_width=True)
+                st.info("No photo uploaded.")
 
             st.markdown("#### Seismic Ground Waveform")
             df_wave = generate_seismic_waveform(in_pga, in_freq)
@@ -429,8 +413,8 @@ else:
                 a_score = 0.85
                 st.success(f"Trumpeting Signature Detected (Confidence: {a_score:.1%})")
             else:
-                a_score = 0.70
-                st.info(f"Acoustic Score: {a_score:.1%}")
+                a_score = 0.10
+                st.info("No audio clip uploaded (Acoustic Score: 10.0%).")
 
             st.write(f"🐾 **Seismic Footfall Score**: `{s_score:.1%}` (PGA: `{in_pga}g`, Freq: `{in_freq}Hz`)")
             st.write(f"🗺️ **Geospatial Risk Index**: `{g_score:.1%}` for **{sel_settlement}**")
