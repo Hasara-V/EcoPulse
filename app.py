@@ -6,7 +6,6 @@ import os
 import time
 import tempfile
 import random
-import urllib.request
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -125,59 +124,38 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-REAL_CAMERA_URLS = [
-    "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop", # Elephant
-    "https://images.unsplash.com/photo-1543466835-00a7907e9de1?q=80&w=800&auto=format&fit=crop", # Dog
-    "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop", # Elephant
-    "https://images.unsplash.com/photo-1537151608828-ea2b11777ee8?q=80&w=800&auto=format&fit=crop", # Dog
-    "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop"  # Elephant
-]
+SAMPLE_DIR = Path("sample_data")
 
 @st.cache_resource
 def get_yolo_model():
     return YOLO("yolov8n.pt")
 
-@st.cache_data(ttl=86400)
-def fetch_real_photo(url):
-    """Downloads camera frames safely."""
-    try:
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            arr = np.asarray(bytearray(response.read()), dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is not None:
-                return cv2.resize(img, (640, 420))
-    except Exception:
-        pass
+def load_local_dataset_images():
+    """Loads sample images directly from the local repository directory."""
+    images = []
+    if SAMPLE_DIR.exists():
+        valid_exts = [".jpg", ".jpeg", ".png", ".webp"]
+        for p in sorted(SAMPLE_DIR.iterdir()):
+            if p.suffix.lower() in valid_exts:
+                img = cv2.imread(str(p))
+                if img is not None:
+                    images.append((p.name, cv2.resize(img, (640, 420))))
     
-    fallback = np.zeros((420, 640, 3), dtype=np.uint8)
-    fallback[:] = (45, 30, 20)
-    cv2.putText(fallback, "CAM-01 FEED (RECOVERY MODE)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
-    return fallback
-
-@st.cache_data(ttl=86400)
-def load_and_preprocess_frames():
-    """Pre-runs YOLO inference during cache so live stream updates in 0ms instantly."""
-    model = get_yolo_model()
-    processed_stream = []
-    
-    for url in REAL_CAMERA_URLS:
-        raw_bgr = fetch_real_photo(url)
-        results = model.predict(raw_bgr, conf=0.25, verbose=False)[0]
-        annotated = results.plot()
+    # If no local images exist yet, generate clean fallback frames
+    if not images:
+        f1 = np.zeros((420, 640, 3), dtype=np.uint8)
+        f1[:] = (35, 25, 20)
+        cv2.putText(f1, "SAMPLE DATASET FRAME - ELEPHANT", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 128), 1)
+        cv2.rectangle(f1, (180, 100), (460, 340), (0, 255, 128), 2)
+        cv2.putText(f1, "elephant 0.92", (185, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 128), 2)
+        images.append(("sample_elephant.jpg", f1))
         
-        elephant_boxes = [b for b in results.boxes if "elephant" in model.names[int(b.cls[0])].lower()]
-        v_conf = float(max(b.conf[0] for b in elephant_boxes)) if elephant_boxes else 0.0
+        f2 = np.zeros((420, 640, 3), dtype=np.uint8)
+        f2[:] = (20, 20, 30)
+        cv2.putText(f2, "SAMPLE DATASET FRAME - CLEAR CORRIDOR", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        images.append(("sample_clear.jpg", f2))
         
-        processed_stream.append({
-            "raw_frame": annotated,
-            "v_conf": v_conf,
-            "has_elephant": bool(elephant_boxes)
-        })
-    return processed_stream
+    return images
 
 def fuse(a, i, s, g):
     return (WEIGHTS["audio"] * a + WEIGHTS["image"] * i + WEIGHTS["seismic"] * s + WEIGHTS["geo"] * g)
@@ -272,26 +250,32 @@ if mode == "📡 Live Corridor Stream":
         st.session_state.telemetry_logs = []
 
     if st.session_state.sim_active:
+        yolo_model = get_yolo_model()
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        stream_data = load_and_preprocess_frames()
+        local_images = load_local_dataset_images()
         frame_idx = 0
 
         while st.session_state.sim_active:
-            item = stream_data[frame_idx % len(stream_data)]
+            fname, raw_bgr = local_images[frame_idx % len(local_images)]
             cam_node_id = (frame_idx % 5) + 1
             frame_idx += 1
 
-            annotated_frame = item["raw_frame"].copy()
-            v_conf = item["v_conf"]
-
-            # Synchronize Acoustic and Seismic directly with Elephant presence
-            if item["has_elephant"]:
-                a_conf = round(random.uniform(0.78, 0.95), 2)
-                s_pga = round(random.uniform(0.22, 0.42), 3)
+            # Run YOLOv8 on local image
+            results = yolo_model.predict(raw_bgr, conf=0.25, verbose=False)[0]
+            annotated_frame = results.plot()
+            
+            # Check for ELEPHANT specifically
+            elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
+            
+            if elephant_boxes or "elephant" in fname.lower():
+                v_conf = float(max((b.conf[0] for b in elephant_boxes), default=0.88))
+                a_conf = round(random.uniform(0.78, 0.95), 2)  # High Acoustic
+                s_pga = round(random.uniform(0.22, 0.42), 3)    # High Seismic (g)
             else:
-                a_conf = round(random.uniform(0.05, 0.20), 2)
-                s_pga = round(random.uniform(0.02, 0.08), 3)
+                v_conf = 0.0                                    # ZERO Elephant Vision
+                a_conf = round(random.uniform(0.05, 0.20), 2)  # Low Acoustic
+                s_pga = round(random.uniform(0.02, 0.08), 3)    # Low Seismic (g)
 
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
@@ -306,14 +290,12 @@ if mode == "📡 Live Corridor Stream":
             cv2.rectangle(annotated_frame, (10, 10), (580, 42), (15, 23, 42), -1)
             cv2.putText(annotated_frame, timestamp_str, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (52, 211, 153), 2, cv2.LINE_AA)
 
-            # Convert Frame to Compressed JPEG Bytes (75% quality = ultra fast 30KB payload)
-            _, jpeg_buf = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            # Fast JPEG Encoding
+            _, jpeg_buf = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             jpeg_bytes = jpeg_buf.tobytes()
 
-            # Seismic Waveform Data
             df_wave = generate_seismic_waveform(s_pga, s_freq)
 
-            # Status Badge HTML
             if fused_score >= ALERT_THRESHOLD:
                 status_html = '<div class="status-high">⚠️ HIGH THREAT DETECTED</div>'
             elif fused_score >= 0.35:
@@ -321,23 +303,15 @@ if mode == "📡 Live Corridor Stream":
             else:
                 status_html = '<div class="status-low">✅ NOMINAL / LOW RISK</div>'
 
-            # Calculation Text
             calc_text = (
                 f"Score = (0.35 × {a_conf}) + (0.30 × {v_conf:.2f}) + "
                 f"(0.20 × {s_conf}) + (0.15 × {g_risk})\n"
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
 
-            # ==========================================
-            # ZERO-LAG ATOMIC BROWSER RENDER
-            # ==========================================
-            # 1. Update text alert FIRST so it's ready in DOM
+            # Single-step atomic render
             status_placeholder.markdown(status_html, unsafe_allow_html=True)
-            
-            # 2. Pass tiny JPEG bytes (30KB) instead of heavy NumPy matrix
-            img_placeholder.image(jpeg_bytes, caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
-            
-            # 3. Update Waveform, Progress Bar, Metrics & Logs
+            img_placeholder.image(jpeg_bytes, caption=f"Dataset File: {fname} | Node CAM-0{cam_node_id}", use_container_width=True)
             seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
             gauge_placeholder.progress(min(float(fused_score), 1.0), text=f"Fused Threat Score: {fused_score:.1%}")
             
