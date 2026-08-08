@@ -125,18 +125,21 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-# Alternating sequence of Elephants and Non-Elephants (Dogs/Cattle/Clear)
 REAL_CAMERA_URLS = [
     "https://images.unsplash.com/photo-1557050543-4d5f4e07ef46?q=80&w=800&auto=format&fit=crop", # Elephant
-    "https://images.unsplash.com/photo-1543466835-00a7907e9de1?q=80&w=800&auto=format&fit=crop", # Dog (Non-Target)
+    "https://images.unsplash.com/photo-1543466835-00a7907e9de1?q=80&w=800&auto=format&fit=crop", # Dog
     "https://images.unsplash.com/photo-1581852017103-68ac65514cf7?q=80&w=800&auto=format&fit=crop", # Elephant
-    "https://images.unsplash.com/photo-1537151608828-ea2b11777ee8?q=80&w=800&auto=format&fit=crop", # Dog (Non-Target)
+    "https://images.unsplash.com/photo-1537151608828-ea2b11777ee8?q=80&w=800&auto=format&fit=crop", # Dog
     "https://images.unsplash.com/photo-1508811328014-a957a07bf11c?q=80&w=800&auto=format&fit=crop"  # Elephant
 ]
 
+@st.cache_resource
+def get_yolo_model():
+    return YOLO("yolov8n.pt")
+
 @st.cache_data(ttl=86400)
 def fetch_real_photo(url):
-    """Downloads and caches camera frames safely."""
+    """Downloads camera frames safely."""
     try:
         req = urllib.request.Request(
             url, 
@@ -156,9 +159,25 @@ def fetch_real_photo(url):
     return fallback
 
 @st.cache_data(ttl=86400)
-def load_all_frames():
-    """Pre-loads camera frames into memory."""
-    return [fetch_real_photo(url) for url in REAL_CAMERA_URLS]
+def load_and_preprocess_frames():
+    """Pre-runs YOLO inference during cache so live stream updates in 0ms instantly."""
+    model = get_yolo_model()
+    processed_stream = []
+    
+    for url in REAL_CAMERA_URLS:
+        raw_bgr = fetch_real_photo(url)
+        results = model.predict(raw_bgr, conf=0.25, verbose=False)[0]
+        annotated = results.plot()
+        
+        elephant_boxes = [b for b in results.boxes if "elephant" in model.names[int(b.cls[0])].lower()]
+        v_conf = float(max(b.conf[0] for b in elephant_boxes)) if elephant_boxes else 0.0
+        
+        processed_stream.append({
+            "image": annotated,
+            "v_conf": v_conf,
+            "has_elephant": bool(elephant_boxes)
+        })
+    return processed_stream
 
 def fuse(a, i, s, g):
     return (WEIGHTS["audio"] * a + WEIGHTS["image"] * i + WEIGHTS["seismic"] * s + WEIGHTS["geo"] * g)
@@ -253,35 +272,28 @@ if mode == "📡 Live Corridor Stream":
         st.session_state.telemetry_logs = []
 
     if st.session_state.sim_active:
-        yolo_model = YOLO("yolov8n.pt")
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        all_frames = load_all_frames()
+        # Pre-processed instant stream
+        stream_data = load_and_preprocess_frames()
         frame_idx = 0
 
         while st.session_state.sim_active:
-            # 1. Fetch Current Frame
-            raw_bgr_img = all_frames[frame_idx % len(all_frames)].copy()
+            # 1. Fetch pre-processed frame & vision score instantly
+            item = stream_data[frame_idx % len(stream_data)]
             cam_node_id = (frame_idx % 5) + 1
             frame_idx += 1
 
-            # 2. Run YOLOv8 live detection
-            results = yolo_model.predict(raw_bgr_img, conf=0.25, verbose=False)[0]
-            annotated_frame = results.plot()
-            
-            # 3. Synchronize All Sensor Confidences directly to THIS frame's detection
-            elephant_boxes = [b for b in results.boxes if "elephant" in yolo_model.names[int(b.cls[0])].lower()]
-            
-            if elephant_boxes:
-                # Target Elephant Detected -> HIGH RISK SENSOR STATE
-                v_conf = float(max(b.conf[0] for b in elephant_boxes))
-                a_conf = round(random.uniform(0.78, 0.95), 2)  # High Acoustic
-                s_pga = round(random.uniform(0.22, 0.42), 3)    # High Seismic (g)
+            annotated_frame = item["image"].copy()
+            v_conf = item["v_conf"]
+
+            # Synchronize Acoustic and Seismic directly with Elephant presence
+            if item["has_elephant"]:
+                a_conf = round(random.uniform(0.78, 0.95), 2)
+                s_pga = round(random.uniform(0.22, 0.42), 3)
             else:
-                # Non-Elephant Detected (e.g., Dog / Clear) -> LOW RISK SENSOR STATE
-                v_conf = 0.0                                    # ZERO Elephant Vision
-                a_conf = round(random.uniform(0.05, 0.20), 2)  # Low Acoustic
-                s_pga = round(random.uniform(0.02, 0.08), 3)    # Low Seismic (g)
+                a_conf = round(random.uniform(0.05, 0.20), 2)
+                s_pga = round(random.uniform(0.02, 0.08), 3)
 
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
@@ -289,7 +301,6 @@ if mode == "📡 Live Corridor Stream":
             cur_settlement = settlements[frame_idx % len(settlements)]
             g_risk = round(random.uniform(0.35, 0.65), 2)
 
-            # 4. Compute Fused Score for THIS Frame
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
 
             # OSD Telemetry Overlay
@@ -297,43 +308,40 @@ if mode == "📡 Live Corridor Stream":
             cv2.rectangle(annotated_frame, (10, 10), (620, 45), (15, 23, 42), -1)
             cv2.putText(annotated_frame, timestamp_str, (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (52, 211, 153), 2, cv2.LINE_AA)
 
-            # ==========================================
-            # ATOMIC UI REFRESH (ALL ELEMENTS SYNCD)
-            # ==========================================
-            
-            # A. Update Camera Feed
-            img_placeholder.image(annotated_frame, channels="BGR", caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
-
-            # B. Update Seismic Waveform
+            # Seismic Waveform Data
             df_wave = generate_seismic_waveform(s_pga, s_freq)
-            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
 
-            # C. Update Threat Status Alert Bar & Gauge
+            # Status Badge HTML
             if fused_score >= ALERT_THRESHOLD:
-                status_placeholder.markdown('<div class="status-high">⚠️ HIGH THREAT DETECTED</div>', unsafe_allow_html=True)
-                st.toast(f"🚨 ALERT: Elephant detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
+                status_html = '<div class="status-high">⚠️ HIGH THREAT DETECTED</div>'
             elif fused_score >= 0.35:
-                status_placeholder.markdown('<div class="status-med">⚡ ELEVATED MOVEMENT</div>', unsafe_allow_html=True)
+                status_html = '<div class="status-med">⚡ ELEVATED MOVEMENT</div>'
             else:
-                status_placeholder.markdown('<div class="status-low">✅ NOMINAL / LOW RISK</div>', unsafe_allow_html=True)
+                status_html = '<div class="status-low">✅ NOMINAL / LOW RISK</div>'
 
-            gauge_placeholder.progress(min(float(fused_score), 1.0), text=f"Fused Threat Score: {fused_score:.1%}")
-
-            # D. Update Metric Cards
-            audio_m.metric("Acoustic", f"{a_conf:.0%}")
-            vision_m.metric("Vision", f"{v_conf:.0%}")
-            seismic_m.metric("Seismic", f"{s_pga:.2f}g")
-            geo_m.metric("Geo Risk", f"{g_risk:.0%}")
-
-            # E. Update Calculation Formula
+            # Calculation Text
             calc_text = (
                 f"Score = (0.35 × {a_conf}) + (0.30 × {v_conf:.2f}) + "
                 f"(0.20 × {s_conf}) + (0.15 × {g_risk})\n"
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
+
+            # ==========================================
+            # INSTANT 0ms SINGLE-BLOCK RENDER
+            # ==========================================
+            img_placeholder.image(annotated_frame, channels="BGR", caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
+            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
+            status_placeholder.markdown(status_html, unsafe_allow_html=True)
+            gauge_placeholder.progress(min(float(fused_score), 1.0), text=f"Fused Threat Score: {fused_score:.1%}")
+            
+            audio_m.metric("Acoustic", f"{a_conf:.0%}")
+            vision_m.metric("Vision", f"{v_conf:.0%}")
+            seismic_m.metric("Seismic", f"{s_pga:.2f}g")
+            geo_m.metric("Geo Risk", f"{g_risk:.0%}")
+            
             math_placeholder.code(calc_text, language="text")
 
-            # F. Append Telemetry Logs
+            # Append Telemetry Logs
             st.session_state.telemetry_logs.insert(0, {
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
@@ -347,7 +355,9 @@ if mode == "📡 Live Corridor Stream":
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
             
-            # Pause between frames
+            if fused_score >= ALERT_THRESHOLD and frame_idx % 2 == 0:
+                st.toast(f"🚨 ALERT: Elephant detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
+
             time.sleep(3.0)
     else:
         st.info("Click 'Initialize Early-Warning Stream' to start parsing corridor sensor inputs.")
@@ -390,7 +400,7 @@ else:
         with col_res1:
             st.markdown("### 📷 Computer Vision Detection")
             if up_image:
-                yolo_model = YOLO("yolov8n.pt")
+                yolo_model = get_yolo_model()
                 suffix = Path(up_image.name).suffix or ".jpg"
                 with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                     tmp.write(up_image.read())
