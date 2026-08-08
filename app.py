@@ -1,3 +1,7 @@
+"""
+EcoPulse - Streamlit demo
+
+"""
 import os
 import time
 import tempfile
@@ -85,17 +89,6 @@ div.stButton > button:hover {
     animation: pulse 1.5s infinite;
 }
 
-.status-med {
-    background-color: rgba(120, 53, 15, 0.85);
-    border: 2px solid #f59e0b;
-    color: #fde68a;
-    padding: 14px;
-    border-radius: 10px;
-    text-align: center;
-    font-weight: bold;
-    font-size: 18px;
-}
-
 .status-low {
     background-color: rgba(6, 78, 59, 0.85);
     border: 2px solid #10b981;
@@ -129,8 +122,8 @@ SEARCH_DIRS = [
 
 @st.cache_resource
 def get_yolo_model():
-    """Loads multi-class detector for full animal and human recognition."""
-    return YOLO("yolov8n.pt"), "Multi-Class Edge Engine (yolov8n.pt)"
+    """Directly loads standard COCO multi-class YOLOv8 model."""
+    return YOLO("yolov8n.pt")
 
 @st.cache_data(ttl=86400)
 def load_all_local_images():
@@ -162,8 +155,8 @@ def load_all_local_images():
 
 @st.cache_data(ttl=86400)
 def prepare_preprocessed_stream():
-    """Multi-class image categorization: Elephant vs Person vs Other Animal."""
-    model, status_str = get_yolo_model()
+    """Pre-runs YOLO and accurately categorizes Elephant vs Human vs Other Animals."""
+    model = get_yolo_model()
     raw_list = load_all_local_images()
     preprocessed = []
 
@@ -179,8 +172,8 @@ def prepare_preprocessed_stream():
         person_confs = [float(b.conf[0]) for b in results.boxes if model.names[int(b.cls[0])].lower() == "person"]
         other_confs = [float(b.conf[0]) for b in results.boxes if model.names[int(b.cls[0])].lower() in OTHER_ANIMALS]
 
-        # Explicit Event Type Logic
-        if elephant_confs and max(elephant_confs) >= 0.40:
+        # Multi-Class Logic Breakdown
+        if elephant_confs:
             event_type = "elephant"
             v_conf = max(elephant_confs)
         elif person_confs or "person" in fname.lower() or "human" in fname.lower():
@@ -191,16 +184,17 @@ def prepare_preprocessed_stream():
             v_conf = 0.0
         elif "elephant" in fname.lower():
             event_type = "elephant"
-            v_conf = 0.88
+            v_conf = 0.85
         else:
             event_type = "clear"
             v_conf = 0.0
 
-        # OSD Overlay
+        # OSD Camera Overlay
         timestamp_str = time.strftime("REC ● 30FPS | CAM CORRIDOR FEED")
         cv2.rectangle(annotated, (10, 10), (450, 40), (15, 23, 42), -1)
         cv2.putText(annotated, timestamp_str, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (52, 211, 153), 2, cv2.LINE_AA)
 
+        # 30KB Fast JPEG Encoding
         _, jpeg_buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
         jpeg_bytes = jpeg_buf.tobytes()
 
@@ -212,7 +206,7 @@ def prepare_preprocessed_stream():
             "detected_classes": list(set(detected_classes))
         })
 
-    return preprocessed, status_str
+    return preprocessed
 
 def fuse(a, i, s, g):
     return (WEIGHTS["audio"] * a + WEIGHTS["image"] * i + WEIGHTS["seismic"] * s + WEIGHTS["geo"] * g)
@@ -240,7 +234,7 @@ HERO_HTML = r"""
 """
 st.markdown(HERO_HTML, unsafe_allow_html=True)
 
-yolo_model, model_status = get_yolo_model()
+yolo_model = get_yolo_model()
 
 # ==========================================
 # 3. SIDEBAR NAVIGATION
@@ -251,7 +245,7 @@ with st.sidebar:
     
     st.divider()
     st.markdown("### 🤖 Active Model Engine")
-    st.caption(f"Status: **{model_status}**")
+    st.caption("Status: **Pre-Trained COCO Engine (yolov8n.pt)**")
 
     st.divider()
     st.markdown("### ⚖️ Multi-Sensor Fusion Weights")
@@ -315,7 +309,7 @@ if mode == "📡 Live Corridor Stream":
     if st.session_state.sim_active:
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        stream_data, _ = prepare_preprocessed_stream()
+        stream_data = prepare_preprocessed_stream()
         frame_idx = 0
 
         while st.session_state.sim_active:
@@ -326,11 +320,12 @@ if mode == "📡 Live Corridor Stream":
             event_type = item["event_type"]
             v_conf = item["v_conf"]
 
-            # Set Acoustic & Seismic based on event type
+            # Only trigger High Acoustic & Seismic when an ELEPHANT is present
             if event_type == "elephant":
                 a_conf = round(random.uniform(0.78, 0.95), 2)
                 s_pga = round(random.uniform(0.24, 0.42), 3)
             else:
+                # Human, Deer, Dog, or Clear Corridor
                 v_conf = 0.0
                 a_conf = round(random.uniform(0.05, 0.15), 2)
                 s_pga = round(random.uniform(0.02, 0.07), 3)
@@ -342,16 +337,15 @@ if mode == "📡 Live Corridor Stream":
             g_risk = round(random.uniform(0.35, 0.65), 2)
 
             fused_score = fuse(a_conf, v_conf, s_conf, g_risk)
-
             df_wave = generate_seismic_waveform(s_pga, s_freq)
 
             # Explicit Threat Status Badge
-            if fused_score >= ALERT_THRESHOLD:
+            if fused_score >= ALERT_THRESHOLD and event_type == "elephant":
                 status_html = '<div class="status-high">⚠️ HIGH THREAT DETECTED (ELEPHANT)</div>'
             elif event_type == "person":
-                status_html = '<div class="status-low">🚶 HUMAN DETECTED (NOMINAL RISK)</div>'
+                status_html = '<div class="status-low">🚶 HUMAN DETECTED (NOMINAL / LOW RISK)</div>'
             elif event_type == "other_animal":
-                status_html = '<div class="status-low">🐾 NON-TARGET ANIMAL (NOMINAL RISK)</div>'
+                status_html = '<div class="status-low">🐾 NON-TARGET ANIMAL DETECTED (NOMINAL RISK)</div>'
             else:
                 status_html = '<div class="status-low">✅ NOMINAL / LOW RISK</div>'
 
@@ -361,6 +355,7 @@ if mode == "📡 Live Corridor Stream":
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
 
+            # Atomic Zero-Lag Render
             status_placeholder.markdown(status_html, unsafe_allow_html=True)
             img_placeholder.image(item["jpeg_bytes"], caption=f"File: {item['fname']} | CAM-0{cam_node_id}", use_container_width=True)
             seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
@@ -381,12 +376,12 @@ if mode == "📡 Live Corridor Stream":
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
-                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD else "Clear / Low Risk"
+                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD and event_type == "elephant" else "Clear / Low Risk"
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
             
-            if fused_score >= ALERT_THRESHOLD and frame_idx % 2 == 0:
+            if fused_score >= ALERT_THRESHOLD and event_type == "elephant" and frame_idx % 2 == 0:
                 st.toast(f"🚨 ALERT: Elephant detected near {cur_settlement}! SMS Dispatched.", icon="🚨")
 
             time.sleep(3.0)
@@ -488,7 +483,7 @@ else:
                 formula_latex = rf"\text{{Score}} = (0.35 \times {a_score:.2f}) + (0.30 \times {v_score:.2f}) + (0.20 \times {s_score:.2f}) + (0.15 \times {g_score:.2f}) = \mathbf{{{fused_score:.2f}}}"
                 st.latex(formula_latex)
 
-            if fused_score >= ALERT_THRESHOLD:
+            if fused_score >= ALERT_THRESHOLD and v_score > 0:
                 st.error(f"🚨 **CRITICAL ALERT TRIGGERED**\n\nSMS Broadcast sent to farming communities near **{sel_settlement}** and Railway Speed Warning active.")
             else:
                 st.success("✅ **NOMINAL STATE**: Fused confidence score is below trigger threshold.")
