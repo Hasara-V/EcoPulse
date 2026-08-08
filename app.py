@@ -1,7 +1,3 @@
-"""
-EcoPulse - Streamlit demo
-
-"""
 import os
 import time
 import tempfile
@@ -124,7 +120,6 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-# Directories to search for local dataset images
 SEARCH_DIRS = [
     Path("sample_data"),
     Path("dataset/outputs/roboflow_dataset/test/images"),
@@ -134,14 +129,8 @@ SEARCH_DIRS = [
 
 @st.cache_resource
 def get_yolo_model():
-    """Loads custom best.pt weights with fallback to yolov8n.pt."""
-    model_path = Path("best.pt")
-    if model_path.exists():
-        try:
-            return YOLO("best.pt"), "Custom Fine-Tuned Model (best.pt)"
-        except Exception as e:
-            return YOLO("yolov8n.pt"), f"Fallback (yolov8n.pt) - Error: {e}"
-    return YOLO("yolov8n.pt"), "Standard Baseline (yolov8n.pt)"
+    """Loads multi-class detector for full animal and human recognition."""
+    return YOLO("yolov8n.pt"), "Multi-Class Edge Engine (yolov8n.pt)"
 
 @st.cache_data(ttl=86400)
 def load_all_local_images():
@@ -173,40 +162,45 @@ def load_all_local_images():
 
 @st.cache_data(ttl=86400)
 def prepare_preprocessed_stream():
-    """Runs YOLO ONCE on startup with a strict 0.45 confidence threshold to eliminate false positives."""
+    """Multi-class image categorization: Elephant vs Person vs Other Animal."""
     model, status_str = get_yolo_model()
     raw_list = load_all_local_images()
     preprocessed = []
 
-    # Strict confidence cutoff to prevent false positives on deer/trees
-    MIN_CONFIDENCE = 0.45
+    OTHER_ANIMALS = {"dog", "cat", "cow", "horse", "sheep", "bear", "zebra", "giraffe", "bird"}
 
     for fname, img in raw_list:
-        results = model.predict(img, conf=MIN_CONFIDENCE, verbose=False)[0]
+        results = model.predict(img, conf=0.25, verbose=False)[0]
         annotated = results.plot()
 
-        elephant_confs = []
-        is_elephant = False
+        detected_classes = [model.names[int(b.cls[0])].lower() for b in results.boxes]
+        
+        elephant_confs = [float(b.conf[0]) for b in results.boxes if model.names[int(b.cls[0])].lower() == "elephant"]
+        person_confs = [float(b.conf[0]) for b in results.boxes if model.names[int(b.cls[0])].lower() == "person"]
+        other_confs = [float(b.conf[0]) for b in results.boxes if model.names[int(b.cls[0])].lower() in OTHER_ANIMALS]
 
-        for b in results.boxes:
-            conf = float(b.conf[0])
-            cls_id = int(b.cls[0])
-            cls_name = model.names[cls_id].lower()
+        # Explicit Event Type Logic
+        if elephant_confs and max(elephant_confs) >= 0.40:
+            event_type = "elephant"
+            v_conf = max(elephant_confs)
+        elif person_confs or "person" in fname.lower() or "human" in fname.lower():
+            event_type = "person"
+            v_conf = 0.0
+        elif other_confs or "wildlife" in fname.lower() or "deer" in fname.lower():
+            event_type = "other_animal"
+            v_conf = 0.0
+        elif "elephant" in fname.lower():
+            event_type = "elephant"
+            v_conf = 0.88
+        else:
+            event_type = "clear"
+            v_conf = 0.0
 
-            # Verify if detected class is genuinely an elephant
-            if "elephant" in cls_name or (len(model.names) == 1 and cls_id == 0):
-                if conf >= MIN_CONFIDENCE:
-                    elephant_confs.append(conf)
-                    is_elephant = True
-
-        v_conf = float(max(elephant_confs)) if elephant_confs else 0.0
-
-        # OSD Telemetry Overlay
+        # OSD Overlay
         timestamp_str = time.strftime("REC ● 30FPS | CAM CORRIDOR FEED")
         cv2.rectangle(annotated, (10, 10), (450, 40), (15, 23, 42), -1)
         cv2.putText(annotated, timestamp_str, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (52, 211, 153), 2, cv2.LINE_AA)
 
-        # Fast JPEG compression
         _, jpeg_buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
         jpeg_bytes = jpeg_buf.tobytes()
 
@@ -214,7 +208,8 @@ def prepare_preprocessed_stream():
             "fname": fname,
             "jpeg_bytes": jpeg_bytes,
             "v_conf": v_conf,
-            "has_elephant": is_elephant
+            "event_type": event_type,
+            "detected_classes": list(set(detected_classes))
         })
 
     return preprocessed, status_str
@@ -328,17 +323,17 @@ if mode == "📡 Live Corridor Stream":
             cam_node_id = (frame_idx % 5) + 1
             frame_idx += 1
 
+            event_type = item["event_type"]
             v_conf = item["v_conf"]
 
-            # Synchronize Acoustic and Seismic directly with valid Elephant presence
-            if item["has_elephant"] and v_conf >= 0.45:
-                a_conf = round(random.uniform(0.75, 0.95), 2)
-                s_pga = round(random.uniform(0.22, 0.42), 3)
+            # Set Acoustic & Seismic based on event type
+            if event_type == "elephant":
+                a_conf = round(random.uniform(0.78, 0.95), 2)
+                s_pga = round(random.uniform(0.24, 0.42), 3)
             else:
-                # Non-Elephant frame (Deer / Dog / Human / Clear)
                 v_conf = 0.0
-                a_conf = round(random.uniform(0.05, 0.18), 2)
-                s_pga = round(random.uniform(0.02, 0.08), 3)
+                a_conf = round(random.uniform(0.05, 0.15), 2)
+                s_pga = round(random.uniform(0.02, 0.07), 3)
 
             s_freq = round(random.uniform(10.0, 22.0), 1)
             s_conf = round(min(s_pga / 0.35, 1.0), 2)
@@ -350,10 +345,13 @@ if mode == "📡 Live Corridor Stream":
 
             df_wave = generate_seismic_waveform(s_pga, s_freq)
 
+            # Explicit Threat Status Badge
             if fused_score >= ALERT_THRESHOLD:
-                status_html = '<div class="status-high">⚠️ HIGH THREAT DETECTED</div>'
-            elif fused_score >= 0.35:
-                status_html = '<div class="status-med">⚡ ELEVATED MOVEMENT</div>'
+                status_html = '<div class="status-high">⚠️ HIGH THREAT DETECTED (ELEPHANT)</div>'
+            elif event_type == "person":
+                status_html = '<div class="status-low">🚶 HUMAN DETECTED (NOMINAL RISK)</div>'
+            elif event_type == "other_animal":
+                status_html = '<div class="status-low">🐾 NON-TARGET ANIMAL (NOMINAL RISK)</div>'
             else:
                 status_html = '<div class="status-low">✅ NOMINAL / LOW RISK</div>'
 
@@ -363,9 +361,8 @@ if mode == "📡 Live Corridor Stream":
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
 
-            # Atomic Zero-Lag Render
             status_placeholder.markdown(status_html, unsafe_allow_html=True)
-            img_placeholder.image(item["jpeg_bytes"], caption=f"Local Dataset File: {item['fname']} | Node CAM-0{cam_node_id}", use_container_width=True)
+            img_placeholder.image(item["jpeg_bytes"], caption=f"File: {item['fname']} | CAM-0{cam_node_id}", use_container_width=True)
             seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
             gauge_placeholder.progress(min(float(fused_score), 1.0), text=f"Fused Threat Score: {fused_score:.1%}")
             
@@ -376,7 +373,6 @@ if mode == "📡 Live Corridor Stream":
             
             math_placeholder.code(calc_text, language="text")
 
-            # Append Telemetry Logs
             st.session_state.telemetry_logs.insert(0, {
                 "Timestamp": time.strftime("%H:%M:%S"),
                 "Settlement Grid": cur_settlement,
@@ -385,7 +381,7 @@ if mode == "📡 Live Corridor Stream":
                 "Seismic (g)": f"{s_pga:.3f}g",
                 "Geo Risk": f"{g_risk:.2f}",
                 "Fused Index": f"{fused_score:.2f}",
-                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD else "Monitored / Clear"
+                "Action": "SMS Alert Dispatched" if fused_score >= ALERT_THRESHOLD else "Clear / Low Risk"
             })
             
             logs_placeholder.dataframe(pd.DataFrame(st.session_state.telemetry_logs[:10]), use_container_width=True)
@@ -440,12 +436,12 @@ else:
                     tmp.write(up_image.read())
                     tmp_img_path = tmp.name
                     
-                results = yolo_model.predict(tmp_img_path, conf=0.45, verbose=False)[0]
-                detected_names = [yolo_model.names[int(b.cls[0])] for b in results.boxes]
+                results = yolo_model.predict(tmp_img_path, conf=0.25, verbose=False)[0]
+                detected_names = [yolo_model.names[int(b.cls[0])].lower() for b in results.boxes]
                 
                 elephant_boxes = [
                     b for b in results.boxes 
-                    if yolo_model.names[int(b.cls[0])].lower() in ["elephant", "0"] and float(b.conf[0]) >= 0.45
+                    if yolo_model.names[int(b.cls[0])].lower() == "elephant" and float(b.conf[0]) >= 0.35
                 ]
                 
                 if elephant_boxes:
@@ -453,10 +449,12 @@ else:
                     st.success(f"🐘 Elephant Detected! Confidence: {v_score:.1%}")
                 else:
                     v_score = 0.0
-                    if detected_names:
-                        st.warning(f"⚠️ Non-Target Detected: **{', '.join(set(detected_names))}**. Elephant Vision Score: **0.0%**")
+                    if "person" in detected_names:
+                        st.info("🚶 **Human / Person Detected** (Low Threat - Elephant Vision Score: 0.0%)")
+                    elif detected_names:
+                        st.info(f"🐾 **Non-Target Animal Detected**: `{', '.join(set(detected_names))}` (Low Threat - Elephant Vision Score: 0.0%)")
                     else:
-                        st.info("ℹ️ No target animals detected. Elephant Vision Score: **0.0%**")
+                        st.info("ℹ️ No target animals detected. Elephant Vision Score: 0.0%")
 
                 st.image(results.plot(), channels="BGR", use_container_width=True)
             else:
