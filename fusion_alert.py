@@ -1,31 +1,5 @@
 """
 EcoPulse - Data Fusion & Alert simulation
---------------------------------------------
-Combines the three modality outputs into one decision, exactly as
-described in the proposal's "Data Fusion Layer": a heuristic weighting
-across acoustic, visual and geospatial confidence scores, which triggers
-a simulated SMS/railway alert when the combined score crosses a
-threshold.
-
-Each of the three inputs now comes from a genuinely trained model:
-  - Audio : audio_classifier.py trained with --background_dir (real
-            elephant-vs-not classifier, not just elephant-vs-elephant)
-  - Vision: image_detector.py using pretrained OR (better) the
-            fine-tuned weights from image_finetune.py
-  - Geo   : geo_habitat_model.py's trained RandomForest habitat model
-            if present, otherwise falls back to the heuristic
-            geo_risk_analysis.py score
-
-Run this AFTER you have trained what you can:
-  1. python audio_classifier.py --background_dir ...   -> outputs/audio_model_best.pt
-  2. (optional) python image_finetune.py ...            -> outputs/image_model_best.pt
-  3. python geo_risk_analysis.py ...                     -> outputs/settlement_risk_scores.csv
-     and/or python geo_habitat_model.py ...              -> outputs/geo_habitat_model.joblib
-
-USAGE:
-    python fusion_alert.py --audio_clip "path/to/some_clip.wav" \
-                            --image "path/to/some_photo.jpg" \
-                            --settlement "Anuradhapura"
 """
 
 import argparse
