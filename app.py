@@ -149,11 +149,11 @@ def fetch_real_photo(url):
             arr = np.asarray(bytearray(response.read()), dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
-                return cv2.resize(img, (720, 480))
+                return cv2.resize(img, (640, 420))
     except Exception:
         pass
     
-    fallback = np.zeros((480, 720, 3), dtype=np.uint8)
+    fallback = np.zeros((420, 640, 3), dtype=np.uint8)
     fallback[:] = (45, 30, 20)
     cv2.putText(fallback, "CAM-01 FEED (RECOVERY MODE)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
     return fallback
@@ -173,7 +173,7 @@ def load_and_preprocess_frames():
         v_conf = float(max(b.conf[0] for b in elephant_boxes)) if elephant_boxes else 0.0
         
         processed_stream.append({
-            "image": annotated,
+            "raw_frame": annotated,
             "v_conf": v_conf,
             "has_elephant": bool(elephant_boxes)
         })
@@ -274,17 +274,15 @@ if mode == "📡 Live Corridor Stream":
     if st.session_state.sim_active:
         settlements = ["Anuradhapura", "Vavuniya", "Habarana", "Polonnaruwa", "Trincomalee"]
         
-        # Pre-processed instant stream
         stream_data = load_and_preprocess_frames()
         frame_idx = 0
 
         while st.session_state.sim_active:
-            # 1. Fetch pre-processed frame & vision score instantly
             item = stream_data[frame_idx % len(stream_data)]
             cam_node_id = (frame_idx % 5) + 1
             frame_idx += 1
 
-            annotated_frame = item["image"].copy()
+            annotated_frame = item["raw_frame"].copy()
             v_conf = item["v_conf"]
 
             # Synchronize Acoustic and Seismic directly with Elephant presence
@@ -305,8 +303,12 @@ if mode == "📡 Live Corridor Stream":
 
             # OSD Telemetry Overlay
             timestamp_str = time.strftime(f"REC ● 30FPS | CAM-0{cam_node_id} CORRIDOR | %Y-%m-%d %H:%M:%S")
-            cv2.rectangle(annotated_frame, (10, 10), (620, 45), (15, 23, 42), -1)
-            cv2.putText(annotated_frame, timestamp_str, (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (52, 211, 153), 2, cv2.LINE_AA)
+            cv2.rectangle(annotated_frame, (10, 10), (580, 42), (15, 23, 42), -1)
+            cv2.putText(annotated_frame, timestamp_str, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (52, 211, 153), 2, cv2.LINE_AA)
+
+            # Convert Frame to Compressed JPEG Bytes (75% quality = ultra fast 30KB payload)
+            _, jpeg_buf = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            jpeg_bytes = jpeg_buf.tobytes()
 
             # Seismic Waveform Data
             df_wave = generate_seismic_waveform(s_pga, s_freq)
@@ -327,11 +329,16 @@ if mode == "📡 Live Corridor Stream":
             )
 
             # ==========================================
-            # INSTANT 0ms SINGLE-BLOCK RENDER
+            # ZERO-LAG ATOMIC BROWSER RENDER
             # ==========================================
-            img_placeholder.image(annotated_frame, channels="BGR", caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
-            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
+            # 1. Update text alert FIRST so it's ready in DOM
             status_placeholder.markdown(status_html, unsafe_allow_html=True)
+            
+            # 2. Pass tiny JPEG bytes (30KB) instead of heavy NumPy matrix
+            img_placeholder.image(jpeg_bytes, caption=f"Frame #{frame_idx} (Node CAM-0{cam_node_id}) | YOLOv8 Edge Model", use_container_width=True)
+            
+            # 3. Update Waveform, Progress Bar, Metrics & Logs
+            seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
             gauge_placeholder.progress(min(float(fused_score), 1.0), text=f"Fused Threat Score: {fused_score:.1%}")
             
             audio_m.metric("Acoustic", f"{a_conf:.0%}")
