@@ -124,7 +124,7 @@ st.markdown(CSS_STYLE, unsafe_allow_html=True)
 WEIGHTS = {"audio": 0.35, "image": 0.30, "seismic": 0.20, "geo": 0.15}
 ALERT_THRESHOLD = 0.55
 
-# Directories to search for uploaded dataset images
+# Directories to search for local dataset images
 SEARCH_DIRS = [
     Path("sample_data"),
     Path("dataset/outputs/roboflow_dataset/test/images"),
@@ -134,7 +134,7 @@ SEARCH_DIRS = [
 
 @st.cache_resource
 def get_yolo_model():
-    """Loads custom best.pt if present, else defaults to yolov8n.pt."""
+    """Loads custom best.pt weights with fallback to yolov8n.pt."""
     model_path = Path("best.pt")
     if model_path.exists():
         try:
@@ -156,12 +156,11 @@ def load_all_local_images():
                     img = cv2.imread(str(p))
                     if img is not None:
                         found_images.append((p.name, cv2.resize(img, (640, 420))))
-                        if len(found_images) >= 15: # Load top 15 frames for speed
+                        if len(found_images) >= 15:
                             break
         if len(found_images) >= 15:
             break
 
-    # Synthetic fallback if no files are found
     if not found_images:
         f1 = np.zeros((420, 640, 3), dtype=np.uint8)
         f1[:] = (35, 25, 20)
@@ -174,29 +173,40 @@ def load_all_local_images():
 
 @st.cache_data(ttl=86400)
 def prepare_preprocessed_stream():
-    """Runs YOLO ONCE on startup and stores compressed 30KB JPEG byte payloads for 0ms lag."""
+    """Runs YOLO ONCE on startup with a strict 0.45 confidence threshold to eliminate false positives."""
     model, status_str = get_yolo_model()
     raw_list = load_all_local_images()
     preprocessed = []
 
+    # Strict confidence cutoff to prevent false positives on deer/trees
+    MIN_CONFIDENCE = 0.45
+
     for fname, img in raw_list:
-        results = model.predict(img, conf=0.20, verbose=False)[0]
+        results = model.predict(img, conf=MIN_CONFIDENCE, verbose=False)[0]
         annotated = results.plot()
 
-        # Check for elephant or class 0 in custom trained weights
-        elephant_boxes = [
-            b for b in results.boxes 
-            if model.names[int(b.cls[0])].lower() in ["elephant", "0"]
-        ]
+        elephant_confs = []
+        is_elephant = False
 
-        v_conf = float(max((b.conf[0] for b in elephant_boxes), default=0.0))
-        
-        # OSD Telemetry
+        for b in results.boxes:
+            conf = float(b.conf[0])
+            cls_id = int(b.cls[0])
+            cls_name = model.names[cls_id].lower()
+
+            # Verify if detected class is genuinely an elephant
+            if "elephant" in cls_name or (len(model.names) == 1 and cls_id == 0):
+                if conf >= MIN_CONFIDENCE:
+                    elephant_confs.append(conf)
+                    is_elephant = True
+
+        v_conf = float(max(elephant_confs)) if elephant_confs else 0.0
+
+        # OSD Telemetry Overlay
         timestamp_str = time.strftime("REC ● 30FPS | CAM CORRIDOR FEED")
         cv2.rectangle(annotated, (10, 10), (450, 40), (15, 23, 42), -1)
         cv2.putText(annotated, timestamp_str, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (52, 211, 153), 2, cv2.LINE_AA)
 
-        # Compress to ultra-light JPEG Bytes
+        # Fast JPEG compression
         _, jpeg_buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
         jpeg_bytes = jpeg_buf.tobytes()
 
@@ -204,7 +214,7 @@ def prepare_preprocessed_stream():
             "fname": fname,
             "jpeg_bytes": jpeg_bytes,
             "v_conf": v_conf,
-            "has_elephant": bool(elephant_boxes) or "elephant" in fname.lower()
+            "has_elephant": is_elephant
         })
 
     return preprocessed, status_str
@@ -320,13 +330,12 @@ if mode == "📡 Live Corridor Stream":
 
             v_conf = item["v_conf"]
 
-            # Synchronize Acoustic and Seismic directly with Elephant presence in the frame
-            if item["has_elephant"]:
-                if v_conf == 0.0:
-                    v_conf = round(random.uniform(0.78, 0.94), 2)
+            # Synchronize Acoustic and Seismic directly with valid Elephant presence
+            if item["has_elephant"] and v_conf >= 0.45:
                 a_conf = round(random.uniform(0.75, 0.95), 2)
                 s_pga = round(random.uniform(0.22, 0.42), 3)
             else:
+                # Non-Elephant frame (Deer / Dog / Human / Clear)
                 v_conf = 0.0
                 a_conf = round(random.uniform(0.05, 0.18), 2)
                 s_pga = round(random.uniform(0.02, 0.08), 3)
@@ -354,7 +363,7 @@ if mode == "📡 Live Corridor Stream":
                 f"      = {fused_score:.2f} (Threshold: {ALERT_THRESHOLD})"
             )
 
-            # ATOMIC ZERO-LAG RENDER
+            # Atomic Zero-Lag Render
             status_placeholder.markdown(status_html, unsafe_allow_html=True)
             img_placeholder.image(item["jpeg_bytes"], caption=f"Local Dataset File: {item['fname']} | Node CAM-0{cam_node_id}", use_container_width=True)
             seismic_chart_placeholder.line_chart(df_wave, x="Time (s)", y="Ground Acceleration (g)", height=150)
@@ -431,11 +440,12 @@ else:
                     tmp.write(up_image.read())
                     tmp_img_path = tmp.name
                     
-                results = yolo_model.predict(tmp_img_path, conf=0.20, verbose=False)[0]
+                results = yolo_model.predict(tmp_img_path, conf=0.45, verbose=False)[0]
                 detected_names = [yolo_model.names[int(b.cls[0])] for b in results.boxes]
+                
                 elephant_boxes = [
                     b for b in results.boxes 
-                    if yolo_model.names[int(b.cls[0])].lower() in ["elephant", "0"]
+                    if yolo_model.names[int(b.cls[0])].lower() in ["elephant", "0"] and float(b.conf[0]) >= 0.45
                 ]
                 
                 if elephant_boxes:
